@@ -1,0 +1,22 @@
+name: SE3nv-cuda116
+channels:
+  - pytorch
+  - nvidia
+  - dglteam
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pytorch=1.13
+#will succeed: pytorch 1.13.1 py3.9_cuda11.6_cudnn8.3.2_0  pytorch
+# pytorch=1.9 will fail as there is no pytorch 1.9 with cuda 11.6
+# -> pytorch cpu will be selected
+  - torchaudio
+  - torchvision
+  - cudatoolkit=11.6
+  - dgl-cuda11.6
+  - icecream
+  - pip
+  - pip:
+    - hydra-core
+    - pyrsistent
