@@ -7,86 +7,9 @@ from rfdiffusion.util import get_tips
 from rfdiffusion.util_module import Dropout, create_custom_forward, rbf, init_lecun_normal
 from rfdiffusion.Attention_module import Attention, FeedForwardLayer, AttentionWithBias
 from rfdiffusion.Track_module import PairStr2Pair
-from icecream import ic
 import math
 
 # Module contains classes and functions to generate initial embeddings
-
-def get_timestep_embedding(timesteps, embedding_dim, max_positions=10000):
-    # Code from https://github.com/hojonathanho/diffusion/blob/master/diffusion_tf/nn.py
-    assert len(timesteps.shape) == 1
-    half_dim = embedding_dim // 2
-    emb = math.log(max_positions) / (half_dim - 1)
-    
-    emb = torch.exp(torch.arange(half_dim, dtype=torch.float32, device=timesteps.device) * -emb)
-    emb = timesteps.float()[:, None] * emb[None, :]
-    emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=1)
-    if embedding_dim % 2 == 1:  # zero pad
-        emb = F.pad(emb, (0, 1), mode='constant')
-    assert emb.shape == (timesteps.shape[0], embedding_dim)
-    return emb
-
-class Timestep_emb(nn.Module):
-
-    def __init__(
-            self,
-            input_size,
-            output_size,
-            T, 
-            use_motif_timestep=True
-        ):
-        super(Timestep_emb, self).__init__()
-        
-        self.input_size = input_size 
-        self.output_size = output_size 
-        self.T = T
-        
-        # get source for timestep embeddings at all t AND zero (for the motif)
-        self.source_embeddings = get_timestep_embedding(torch.arange(self.T+1), self.input_size)
-        self.source_embeddings.requires_grad = False 
-        
-        # Layers to use for projection 
-        self.node_embedder = nn.Sequential(
-            nn.Linear(input_size, output_size, bias=False),
-            nn.ReLU(),
-            nn.Linear(output_size, output_size, bias=True),
-            nn.LayerNorm(output_size),
-        )
-        
-    
-    def get_init_emb(self, t, L, motif_mask):
-        """
-        Calculates and stacks a timestep embedding to project 
-        
-        Parameters:
-            
-            t (int, required): Current timestep
-            
-            L (int, required): Length of protein
-            
-            motif_mask (torch.tensor, required): Boolean mask where True denotes a fixed motif position
-        """
-        assert t > 0, 't should be 1-indexed and cant have t=0'
-
-        t_emb    = torch.clone(self.source_embeddings[t.squeeze()]).to(motif_mask.device)
-        zero_emb = torch.clone(self.source_embeddings[0]).to(motif_mask.device)
-        
-        # timestep embedding for all residues 
-        timestep_embedding = torch.stack([t_emb]*L)
-
-        # slice in motif zero timestep features
-        timestep_embedding[motif_mask] = zero_emb
-        
-        return timestep_embedding
-    
-    
-    def forward(self, L, t, motif_mask):
-        """
-        Constructs and projects a timestep embedding 
-        """
-        emb_in = self.get_init_emb(t,L,motif_mask)
-        emb_out = self.node_embedder(emb_in)
-        return emb_out
 
 class PositionalEncoding2D(nn.Module):
     # Add relative positional encoding to pair features
@@ -119,11 +42,11 @@ class MSA_emb(nn.Module):
         self.emb_state = nn.Embedding(22, d_state)
         self.drop = nn.Dropout(p_drop)
         self.pos = PositionalEncoding2D(d_pair, minpos=minpos, maxpos=maxpos, p_drop=p_drop)
-        
+
         self.input_seq_onehot=input_seq_onehot
-        
+
         self.reset_parameter()
-    
+
     def reset_parameter(self):
         self.emb = init_lecun_normal(self.emb)
         self.emb_q = init_lecun_normal(self.emb_q)
@@ -143,17 +66,17 @@ class MSA_emb(nn.Module):
         #   - pair: Initial Pair embedding (B, L, L, d_pair)
 
         N = msa.shape[1] # number of sequenes in MSA
-        
+
         # msa embedding
         msa = self.emb(msa) # (B, N, L, d_model) # MSA embedding
-        
+
         # Sergey's one hot trick
         tmp = (seq @ self.emb_q.weight).unsqueeze(1) # (B, 1, L, d_model) -- query embedding
 
         msa = msa + tmp.expand(-1, N, -1, -1) # adding query embedding to MSA
         msa = self.drop(msa)
 
-        # pair embedding 
+        # pair embedding
         # Sergey's one hot trick
         left  = (seq @ self.emb_left.weight)[:,None] # (B, 1, L, d_pair)
         right = (seq @ self.emb_right.weight)[:,:,None] # (B, L, 1, d_pair)
@@ -175,9 +98,9 @@ class Extra_emb(nn.Module):
         self.drop = nn.Dropout(p_drop)
 
         self.input_seq_onehot=input_seq_onehot
-        
+
         self.reset_parameter()
-    
+
     def reset_parameter(self):
         self.emb = init_lecun_normal(self.emb)
         nn.init.zeros_(self.emb.bias)
@@ -191,17 +114,9 @@ class Extra_emb(nn.Module):
         #   - msa: Initial MSA embedding (B, N, L, d_msa)
         N = msa.shape[1] # number of sequenes in MSA
         msa = self.emb(msa) # (B, N, L, d_model) # MSA embedding
-        
+
         # Sergey's one hot trick
         seq = (seq @ self.emb_q.weight).unsqueeze(1) # (B, 1, L, d_model) -- query embedding
-        """
-        #TODO delete this once verified
-        if self.input_seq_onehot:
-            # Sergey's one hot trick
-            seq = (seq @ self.emb_q.weight).unsqueeze(1) # (B, 1, L, d_model) -- query embedding
-        else:
-            seq = self.emb_q(seq).unsqueeze(1) # (B, 1, L, d_model) -- query embedding
-        """
         msa = msa + seq.expand(-1, N, -1, -1) # adding query embedding to MSA
         return self.drop(msa)
 
@@ -247,7 +162,7 @@ class TemplateTorsionStack(nn.Module):
         pair = pair.reshape(B*T, L, L, -1)
         pair = torch.cat((pair, rbf_feat), dim=-1)
         pair = self.proj_pair(pair)
-        
+
         for i_block in range(self.n_block):
             if use_checkpoint:
                 tors = tors + checkpoint.checkpoint(create_custom_forward(self.row_attn[i_block]), tors, pair)
@@ -267,9 +182,9 @@ class Templ_emb(nn.Module):
     #   - confidence (1)
     #   - contacting or note (1). NB this is added for diffusion model. Used only in complex training examples - 1 signifies that a residue in the non-diffused chain\
     #     i.e. the context, is in contact with the diffused chain.
-    #   
+    #
     #Added extra t1d dimension for contacting or not
-    def __init__(self, d_t1d=21+1+1, d_t2d=43+1, d_tor=30, d_pair=128, d_state=32, 
+    def __init__(self, d_t1d=21+1+1, d_t2d=43+1, d_tor=30, d_pair=128, d_state=32,
                  n_block=2, d_templ=64,
                  n_head=4, d_hidden=16, p_drop=0.25):
         super(Templ_emb, self).__init__()
@@ -277,25 +192,25 @@ class Templ_emb(nn.Module):
         self.emb = nn.Linear(d_t1d*2+d_t2d, d_templ)
         self.templ_stack = TemplatePairStack(n_block=n_block, d_templ=d_templ, n_head=n_head,
                                              d_hidden=d_hidden, p_drop=p_drop)
-        
-        self.attn = Attention(d_pair, d_templ, n_head, d_hidden, d_pair, p_drop=p_drop)
-        
+
+        self.attn = Attention(d_pair, d_templ, n_head, d_hidden, d_pair)
+
         # process torsion angles
         self.emb_t1d = nn.Linear(d_t1d+d_tor, d_templ)
         self.proj_t1d = nn.Linear(d_templ, d_templ)
         #self.tor_stack = TemplateTorsionStack(n_block=n_block, d_templ=d_templ, n_head=n_head,
         #                                      d_hidden=d_hidden, p_drop=p_drop)
-        self.attn_tor = Attention(d_state, d_templ, n_head, d_hidden, d_state, p_drop=p_drop)
+        self.attn_tor = Attention(d_state, d_templ, n_head, d_hidden, d_state)
 
         self.reset_parameter()
-    
+
     def reset_parameter(self):
         self.emb = init_lecun_normal(self.emb)
         nn.init.zeros_(self.emb.bias)
 
         nn.init.kaiming_normal_(self.emb_t1d.weight, nonlinearity='relu')
         nn.init.zeros_(self.emb_t1d.bias)
-        
+
         self.proj_t1d = init_lecun_normal(self.proj_t1d)
         nn.init.zeros_(self.proj_t1d.bias)
 
@@ -321,7 +236,7 @@ class Templ_emb(nn.Module):
 
         # process each template features
         t1d = self.proj_t1d(F.relu_(self.emb_t1d(t1d)))
-        
+
         # mixing query state features to template state features
         state = state.reshape(B*L, 1, -1)
         t1d = t1d.permute(0,2,1,3).reshape(B*L, T, -1)
@@ -354,9 +269,9 @@ class Recycling(nn.Module):
         self.norm_state = nn.LayerNorm(d_state)
         self.norm_pair = nn.LayerNorm(d_pair)
         self.norm_msa = nn.LayerNorm(d_msa)
-        
+
         self.reset_parameter()
-    
+
     def reset_parameter(self):
         self.proj_dist = init_lecun_normal(self.proj_dist)
         nn.init.zeros_(self.proj_dist.bias)
@@ -367,7 +282,7 @@ class Recycling(nn.Module):
         #
         left = state.unsqueeze(2).expand(-1,-1,L,-1)
         right = state.unsqueeze(1).expand(-1,L,-1,-1)
-        
+
         # three anchor atoms
         N  = xyz[:,:,0]
         Ca = xyz[:,:,1]
@@ -377,8 +292,8 @@ class Recycling(nn.Module):
         b = Ca - N
         c = C - Ca
         a = torch.cross(b, c, dim=-1)
-        Cb = -0.58273431*a + 0.56802827*b - 0.54067466*c + Ca    
-        
+        Cb = -0.58273431*a + 0.56802827*b - 0.54067466*c + Ca
+
         dist = rbf(torch.cdist(Cb, Cb))
         dist = torch.cat((dist, left, right), dim=-1)
         dist = self.proj_dist(dist)

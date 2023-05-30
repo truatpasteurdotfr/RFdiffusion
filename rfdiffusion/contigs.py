@@ -1,7 +1,6 @@
 import sys
 import numpy as np
 import random
-from icecream import ic
 
 
 class ContigMap:
@@ -118,7 +117,7 @@ class ContigMap:
 
         # Handle provide seq. This is zero-indexed, and used only for partial diffusion
         if provide_seq is not None:
-            for i in provide_seq[0].split(","):
+            for i in provide_seq:
                 if "-" in i:
                     self.inpaint_seq[
                         int(i.split("-")[0]) : int(i.split("-")[1]) + 1
